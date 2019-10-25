@@ -1,0 +1,10 @@
+.DS_Store
+*.pyc
+*.pyc
+*.csv
+*.csv
+*.csv
+data/
+__pycache__
+deps.words*
+vim.exe.stackdump
