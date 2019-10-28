@@ -31,27 +31,27 @@ def softmax(ary):
 	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
 	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
 
-class Tensor(object):
-	def __init__(self, value, requires_grad=False):
-		super(Tensor, self).__init__()
-		self.value = value
-		self.grad = None
-		self.requires_grad = requires_grad
+class Tensor(np.ndarray):
+	def __new__(cls, input_array, requires_grad=False):
+		obj = np.asarray(input_array).view(cls)
+		obj.grad = None
+		obj.requires_grad = requires_grad
+		return obj
 
 	def backward(self, value):
 		self.grad = value
 
 def matmul(t1, t2):
-	newvalue = np.matmul(t1.value, t2.value)
-	newtensor = Tensor(newvalue, requires_grad=True)
+	newtensor = np.matmul(t1, t2)
+	newtensor.requires_grad = True
 	def backward(value):
 		g1 = None
 		g2 = None
 		if t1.requires_grad:
-			g1 = value.dot(t2.value.T)
+			g1 = value.dot(t2.T)
 			t1.backward(g1)
 		if t2.requires_grad:
-			g2 = t1.value.T.dot(value)
+			g2 = t1.T.dot(value)
 			t2.backward(g2)
 
 		newtensor.grad = [g1, g2]
@@ -60,8 +60,8 @@ def matmul(t1, t2):
 	return newtensor
 
 def add(t1, t2):
-	newvalue = t1.value + t2.value
-	newtensor = Tensor(newvalue, requires_grad=True)
+	newtensor = t1 + t2
+	newtensor.requires_grad = True
 	def backward(value):
 		g1 = None
 		g2 = None
@@ -76,9 +76,9 @@ def add(t1, t2):
 	return newtensor
 
 def relu(t1):
-	mask = (t1.value > 0).astype(np.int32)
-	newvalue = np.maximum(t1.value, 0.0)
-	newtensor = Tensor(newvalue, requires_grad=True)
+	mask = (t1 > 0).astype(np.int32)
+	newtensor = np.maximum(t1, 0.0)
+	newtensor.requires_grad = True
 
 	def backward(value):
 		g1 = None
@@ -89,19 +89,19 @@ def relu(t1):
 	newtensor.backward = backward
 	return newtensor
 
-def softmax_cross_entropy_with_logits(onehot, logits):
-	l_softmax = softmax(logits.value)+1e-64
-	nll = -np.mean(np.sum(np.log(l_softmax) * onehot, axis=-1))
-	newtensor = Tensor(nll, requires_grad=True)
+def softmax_cross_entropy_with_logits(y, logits):
+	l_softmax = softmax(logits)+1e-64
+	nll = -np.mean(np.log(l_softmax[range(len(y)),y]))
+	nll.requires_grad = True
 	def backward():
-		delta = l_softmax - Y_onehot
-		logits.backward(delta)
-	newtensor.backward = backward
-	return newtensor
+		l_softmax[range(len(y)), y] -= 1
+		logits.backward(l_softmax)
+	nll.backward = backward
+	return nll
 
 def sgd(varlist, lr):
 	for v in varlist:
-		v.value -= v.grad * lr
+		v -= v.grad * lr
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser('Nonlinear text classification trainer')
@@ -139,6 +139,7 @@ if __name__ == "__main__":
 
 	X = Tensor(np.asarray(X, dtype=np.float32))
 	Y = Tensor(np.asarray(Y, dtype=np.int32))
+	Y_onehot = Tensor(Y_onehot)
 	WA = Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)), requires_grad=True)
 	bA = Tensor(np.random.normal(0, 1, (1, args.u)), requires_grad=True)
 
@@ -151,8 +152,8 @@ if __name__ == "__main__":
 		h = relu(h_raw)
 		l = add(matmul(h, WB), bB)
 
-		nll = softmax_cross_entropy_with_logits(Y_onehot, l)
-		print(i, nll.value)
+		nll = softmax_cross_entropy_with_logits(Y, l)
+		print(i, nll)
 		nll.backward()
 		sgd([WA, bA, WB, bB], args.l)
 
