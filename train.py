@@ -38,69 +38,75 @@ class Tensor(np.ndarray):
 		obj.requires_grad = requires_grad
 		return obj
 
-	def backward(self, value):
-		self.grad = value
+	def backward(self, grad):
+		self.grad = grad
 
 def matmul(t1, t2):
-	newtensor = np.matmul(t1, t2)
-	newtensor.requires_grad = True
-	def backward(value):
+	v = np.matmul(t1, t2)
+	v.requires_grad = True
+
+	def backward(grad):
 		g1 = None
 		g2 = None
 		if t1.requires_grad:
-			g1 = value.dot(t2.T)
+			g1 = grad.dot(t2.T)
 			t1.backward(g1)
 		if t2.requires_grad:
-			g2 = t1.T.dot(value)
+			g2 = t1.T.dot(grad)
 			t2.backward(g2)
+		v.grad = [g1, g2]
 
-		newtensor.grad = [g1, g2]
-
-	newtensor.backward = backward
-	return newtensor
+	v.backward = backward
+	return v
 
 def add(t1, t2):
-	newtensor = t1 + t2
-	newtensor.requires_grad = True
-	def backward(value):
+	v = t1 + t2
+	v.requires_grad = True
+
+	def backward(grad):
 		g1 = None
 		g2 = None
 		if t1.requires_grad:
-			g1 = value
+			g1 = grad
 			t1.backward(g1)
 		if t2.requires_grad:
-			g2 = np.mean(value, axis=0)
+			# hack for broadcasting
+			if t2.squeeze().ndim == 1:
+				g2 = np.mean(grad, axis=0)
+			else:
+				g2 = grad
 			t2.backward(g2)
-		newtensor.grad = [g1, g2]
-	newtensor.backward = backward
-	return newtensor
+		v.grad = [g1, g2]
+	v.backward = backward
+	return v
 
 def relu(t1):
+	v = np.maximum(t1, 0.0)
+	v.requires_grad = True
 	mask = (t1 > 0).astype(np.int32)
-	newtensor = np.maximum(t1, 0.0)
-	newtensor.requires_grad = True
 
-	def backward(value):
+	def backward(grad):
 		g1 = None
 		if t1.requires_grad:
-			g1 = value * mask
+			g1 = grad * mask
 			t1.backward(g1)
-		newtensor.grad = g1
-	newtensor.backward = backward
-	return newtensor
+		v.grad = g1
+	v.backward = backward
+	return v
 
-def softmax_cross_entropy_with_logits(y, logits):
-	l_softmax = softmax(logits)+1e-64
-	nll = -np.mean(np.log(l_softmax[range(len(y)),y]))
+def sparse_softmax_cross_entropy_with_logits(labels, logits):
+	l_softmax = softmax(logits) + np.finfo(logits.dtype).eps
+	nll = -np.mean(np.log(l_softmax[range(len(labels)), labels]))
 	nll.requires_grad = True
+
 	def backward():
-		l_softmax[range(len(y)), y] -= 1
+		l_softmax[range(len(labels)), labels] -= 1
 		logits.backward(l_softmax)
 	nll.backward = backward
 	return nll
 
-def sgd(varlist, lr):
-	for v in varlist:
+def sgd(var_list, lr):
+	for v in var_list:
 		v -= v.grad * lr
 
 if __name__ == "__main__":
@@ -133,13 +139,8 @@ if __name__ == "__main__":
 
 	label_map = {value: index for index, value in enumerate(label_counter.keys())}
 	Y = [label_map[y] for y in Y_text]
-	Y_onehot = np.zeros((len(Y), len(label_map)))
-	for index, value in enumerate(Y):
-		Y_onehot[index, value] = 1
-
 	X = Tensor(np.asarray(X, dtype=np.float32))
 	Y = Tensor(np.asarray(Y, dtype=np.int32))
-	Y_onehot = Tensor(Y_onehot)
 	WA = Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)), requires_grad=True)
 	bA = Tensor(np.random.normal(0, 1, (1, args.u)), requires_grad=True)
 
@@ -152,7 +153,7 @@ if __name__ == "__main__":
 		h = relu(h_raw)
 		l = add(matmul(h, WB), bB)
 
-		nll = softmax_cross_entropy_with_logits(Y, l)
+		nll = sparse_softmax_cross_entropy_with_logits(Y, l)
 		print(i, nll)
 		nll.backward()
 		sgd([WA, bA, WB, bB], args.l)
