@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 import os
 import numpy as np
 import torch
+from functools import partial
 
 def initialize_embedding(filename):
 	pickle_filename = filename + '.pickle'
@@ -30,29 +31,88 @@ def softmax(ary):
 	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
 	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
 
-def delta_cross_entropy(X,y):
-	"""
-	X is the output from fully connected layer (num_examples x num_classes)
-	y is labels (num_examples x 1)
-		Note that y is not one-hot encoded vector.
-		It can be computed as y.argmax(axis=1) from one-hot encoded vectors of labels if required.
-	"""
-	m = y.shape[0]
-	grad = softmax(X)
-	grad[range(m),y] -= 1
-	grad = grad/m
-	return grad
+class Tensor(object):
+	def __init__(self, value, requires_grad=False):
+		super(Tensor, self).__init__()
+		self.value = value
+		self.grad = None
+		self.requires_grad = requires_grad
+
+	def backward(self, value):
+		self.grad = value
+
+def matmul(t1, t2):
+	newvalue = np.matmul(t1.value, t2.value)
+	newtensor = Tensor(newvalue, requires_grad=True)
+	def backward(value):
+		g1 = None
+		g2 = None
+		if t1.requires_grad:
+			g1 = value.dot(t2.value.T)
+			t1.backward(g1)
+		if t2.requires_grad:
+			g2 = t1.value.T.dot(value)
+			t2.backward(g2)
+
+		newtensor.grad = [g1, g2]
+
+	newtensor.backward = backward
+	return newtensor
+
+def add(t1, t2):
+	newvalue = t1.value + t2.value
+	newtensor = Tensor(newvalue, requires_grad=True)
+	def backward(value):
+		g1 = None
+		g2 = None
+		if t1.requires_grad:
+			g1 = value
+			t1.backward(g1)
+		if t2.requires_grad:
+			g2 = np.mean(value, axis=0)
+			t2.backward(g2)
+		newtensor.grad = [g1, g2]
+	newtensor.backward = backward
+	return newtensor
+
+def relu(t1):
+	mask = (t1.value > 0).astype(np.int32)
+	newvalue = np.maximum(t1.value, 0.0)
+	newtensor = Tensor(newvalue, requires_grad=True)
+
+	def backward(value):
+		g1 = None
+		if t1.requires_grad:
+			g1 = value * mask
+			t1.backward(g1)
+		newtensor.grad = g1
+	newtensor.backward = backward
+	return newtensor
+
+def softmax_cross_entropy_with_logits(onehot, logits):
+	l_softmax = softmax(logits.value)+1e-64
+	nll = -np.mean(np.sum(np.log(l_softmax) * onehot, axis=-1))
+	newtensor = Tensor(nll, requires_grad=True)
+	def backward():
+		delta = l_softmax - Y_onehot
+		logits.backward(delta)
+	newtensor.backward = backward
+	return newtensor
+
+def sgd(varlist, lr):
+	for v in varlist:
+		v.value -= v.grad * lr
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser('Nonlinear text classification trainer')
-	parser.add_argument('-u', help='number of hidden units', type=int, required=True)
-	parser.add_argument('-l', help='learning rate', type=float, required=True)
-	parser.add_argument('-f', help='number of words to read per data item', type=int, required=True)
-	parser.add_argument('-b', help='minibatch size', type=int, required=True)
-	parser.add_argument('-e', help='number of epochs to train for', type=int, required=True)
-	parser.add_argument('-E', help='word embedding file to be read', type=str, required=True)
-	parser.add_argument('-i', help='training file to be read', type=str, required=True)
-	parser.add_argument('-o', help='model file to be written', type=str, required=True)
+	parser.add_argument('-u', help='number of hidden units', type=int, default=100)
+	parser.add_argument('-l', help='learning rate', type=float, default=0.1)
+	parser.add_argument('-f', help='number of words to read per data item', type=int, default=20)
+	parser.add_argument('-b', help='minibatch size', type=int, default=100)
+	parser.add_argument('-e', help='number of epochs to train for', type=int, default=100)
+	parser.add_argument('-E', help='word embedding file to be read', type=str, default='glove.6B.50d.txt')
+	parser.add_argument('-i', help='training file to be read', type=str, default='4dim.train.txt')
+	parser.add_argument('-o', help='model file to be written', type=str, default='model.pickle')
 	args = parser.parse_args()
 	print('Args:', args)
 
@@ -77,40 +137,24 @@ if __name__ == "__main__":
 	for index, value in enumerate(Y):
 		Y_onehot[index, value] = 1
 
-	X = np.asarray(X, dtype=np.float32)
-	Y = np.asarray(Y, dtype=np.int32)
-	WA = np.random.normal(0, 1, (embedding_dim*args.f, args.u))
-	bA = np.random.normal(0, 1, (1, args.u))
+	X = Tensor(np.asarray(X, dtype=np.float32))
+	Y = Tensor(np.asarray(Y, dtype=np.int32))
+	WA = Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)), requires_grad=True)
+	bA = Tensor(np.random.normal(0, 1, (1, args.u)), requires_grad=True)
 
-	WB = np.random.normal(0, 1, (args.u, len(label_map)))
-	bB = np.random.normal(0, 1, (1, len(label_map)))
+	WB = Tensor(np.random.normal(0, 1, (args.u, len(label_map))), requires_grad=True)
+	bB = Tensor(np.random.normal(0, 1, (1, len(label_map))), requires_grad=True)
 
 
 	for i in range(args.e):
-		h_raw = np.matmul(X, WA) + bA
-		mask = (h_raw > 0).astype(np.int32)
-		h = np.maximum(h_raw, 0.0)
-		l = np.matmul(h, WB) + bB
-		l_softmax = softmax(l)+1e-64
+		h_raw = add(matmul(X, WA), bA)
+		h = relu(h_raw)
+		l = add(matmul(h, WB), bB)
 
-		#pdb.set_trace()
-		nll = -np.mean(np.sum(np.log(l_softmax) * Y_onehot, axis=-1))
-		print(i, nll)
-
-		lr = args.l
-		delta = (l_softmax - Y_onehot) * lr
-		delta_bB = np.mean(delta, axis=0)
-		delta_WB = h.T.dot(delta)
-		delta_h = delta.dot(WB.T)
-		delta_h_raw = delta_h * mask
-		delta_bA = np.mean(delta_h_raw, axis=0)
-		delta_WA = X.T.dot(delta_h_raw)
-
-		WA -= delta_WA
-		bA -= delta_bA
-		WB -= delta_WB
-		bB -= delta_bB
-
+		nll = softmax_cross_entropy_with_logits(Y_onehot, l)
+		print(i, nll.value)
+		nll.backward()
+		sgd([WA, bA, WB, bB], args.l)
 
 
 	pdb.set_trace()
