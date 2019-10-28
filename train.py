@@ -26,6 +26,23 @@ def initialize_embedding(filename):
 
 		return word_embedding
 
+def softmax(ary):
+	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
+	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
+
+def delta_cross_entropy(X,y):
+	"""
+	X is the output from fully connected layer (num_examples x num_classes)
+	y is labels (num_examples x 1)
+		Note that y is not one-hot encoded vector.
+		It can be computed as y.argmax(axis=1) from one-hot encoded vectors of labels if required.
+	"""
+	m = y.shape[0]
+	grad = softmax(X)
+	grad[range(m),y] -= 1
+	grad = grad/m
+	return grad
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser('Nonlinear text classification trainer')
 	parser.add_argument('-u', help='number of hidden units', type=int, required=True)
@@ -56,28 +73,45 @@ if __name__ == "__main__":
 
 	label_map = {value: index for index, value in enumerate(label_counter.keys())}
 	Y = [label_map[y] for y in Y_text]
+	Y_onehot = np.zeros((len(Y), len(label_map)))
+	for index, value in enumerate(Y):
+		Y_onehot[index, value] = 1
 
-	X = torch.from_numpy(np.asarray(X, dtype=np.float32))
-	Y = torch.from_numpy(np.asarray(Y, dtype=np.int64))
-	WA = torch.randn(embedding_dim*args.f, args.u, requires_grad=True)
-	bA = torch.randn(1, args.u, requires_grad=True)
-	relu = torch.nn.ReLU()
-	entropy = torch.nn.CrossEntropyLoss()
+	X = np.asarray(X, dtype=np.float32)
+	Y = np.asarray(Y, dtype=np.int32)
+	WA = np.random.normal(0, 1, (embedding_dim*args.f, args.u))
+	bA = np.random.normal(0, 1, (1, args.u))
 
-	WB = torch.randn(args.u, len(label_map), requires_grad=True)
-	bB = torch.randn(1, len(label_map), requires_grad=True)
+	WB = np.random.normal(0, 1, (args.u, len(label_map)))
+	bB = np.random.normal(0, 1, (1, len(label_map)))
 
 
-	optimizer = torch.optim.SGD([WA, bA, WB, bB], lr=args.l)
-	for z in range(args.e):
-		h = relu(torch.matmul(X, WA) + bA)
-		l = torch.matmul(h, WB) + bB
-		loss = entropy(l, Y)
+	for i in range(args.e):
+		h_raw = np.matmul(X, WA) + bA
+		mask = (h_raw > 0).astype(np.int32)
+		h = np.maximum(h_raw, 0.0)
+		l = np.matmul(h, WB) + bB
+		l_softmax = softmax(l)+1e-64
 
-		optimizer.zero_grad()
-		loss.backward()
-		optimizer.step()
-		print(z, loss)
+		#pdb.set_trace()
+		nll = -np.mean(np.sum(np.log(l_softmax) * Y_onehot, axis=-1))
+		print(i, nll)
+
+		lr = args.l
+		delta = (l_softmax - Y_onehot) * lr
+		delta_bB = np.mean(delta, axis=0)
+		delta_WB = h.T.dot(delta)
+		delta_h = delta.dot(WB.T)
+		delta_h_raw = delta_h * mask
+		delta_bA = np.mean(delta_h_raw, axis=0)
+		delta_WA = X.T.dot(delta_h_raw)
+
+		WA -= delta_WA
+		bA -= delta_bA
+		WB -= delta_WB
+		bB -= delta_bB
+
+
 
 	pdb.set_trace()
 	print('123')
