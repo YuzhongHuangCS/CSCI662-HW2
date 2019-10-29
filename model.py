@@ -31,15 +31,17 @@ def softmax(ary):
 	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
 	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
 
+# 2. Implement l2 regulizer
+# 3. Implement validation set
 class Tensor(np.ndarray):
 	def __new__(cls, input_array, requires_grad=False):
 		obj = np.asarray(input_array).view(cls)
-		obj.grad = None
+		obj.grad = np.zeros(input_array.shape)
 		obj.requires_grad = requires_grad
 		return obj
 
 	def backward(self, grad):
-		self.grad = grad
+		self.grad += grad
 
 def matmul(t1, t2):
 	v = np.matmul(t1, t2)
@@ -54,7 +56,6 @@ def matmul(t1, t2):
 		if t2.requires_grad:
 			g2 = t1.T.dot(grad)
 			t2.backward(g2)
-		v.grad = [g1, g2]
 
 	v.backward = backward
 	return v
@@ -76,7 +77,7 @@ def add(t1, t2):
 			else:
 				g2 = grad
 			t2.backward(g2)
-		v.grad = [g1, g2]
+
 	v.backward = backward
 	return v
 
@@ -90,7 +91,7 @@ def relu(t1):
 		if t1.requires_grad:
 			g1 = grad * mask
 			t1.backward(g1)
-		v.grad = g1
+
 	v.backward = backward
 	return v
 
@@ -103,7 +104,7 @@ def sigmoid(t1):
 		if t1.requires_grad:
 			g1 = v * (1 - v) * grad
 			t1.backward(g1)
-		v.grad = g1
+
 	v.backward = backward
 	return v
 
@@ -116,7 +117,7 @@ def tanh(t1):
 		if t1.requires_grad:
 			g1 = (1 - v**2) * grad
 			t1.backward(g1)
-		v.grad = g1
+
 	v.backward = backward
 	return v
 
@@ -131,7 +132,7 @@ def dropout(t1, keep_prob):
 		if t1.requires_grad:
 			g1 = mask * grad
 			t1.backward(g1)
-		v.grad = g1
+
 	v.backward = backward
 	return v
 
@@ -146,12 +147,42 @@ def sparse_softmax_cross_entropy_with_logits(labels, logits):
 	nll.backward = backward
 	return nll
 
-class SGDOptimizer(object):
-	"""docstring for SGDOptimizer"""
-	def __init__(self, var_list, lr, momentum=0.9, nesterov=False):
-		super(SGDOptimizer, self).__init__()
+def l2_loss(t1, rate):
+	v = np.mean(t1**2)
+	v.requires_grad = True
+
+	def backward():
+		g1 = 2*t1*rate
+		t1.backward(g1)
+	v.backward = backward
+	return v
+
+def l1_loss(t1, rate):
+	v = np.mean(np.abs(t1))
+	v.requires_grad = True
+
+	mask = (t1 > 0).astype(np.int32)
+	def backward():
+		g1 = mask * 2 - 1
+		t1.backward(g1)
+	v.backward = backward
+	return v
+
+class Optimizer(object):
+	"""docstring for Optimizer"""
+	def __init__(self, var_list, lr):
+		super(Optimizer, self).__init__()
 		self.var_list = var_list
 		self.lr = lr
+
+	def zero_grad(self):
+		for v in self.var_list:
+			v.grad = np.zeros(v.shape)
+
+class SGDOptimizer(Optimizer):
+	"""docstring for SGDOptimizer"""
+	def __init__(self, var_list, lr, momentum=0.9, nesterov=False):
+		super(SGDOptimizer, self).__init__(var_list, lr)
 		self.momentum = momentum
 		self.v = None
 		self.nesterov = nesterov
@@ -171,12 +202,11 @@ class SGDOptimizer(object):
 			for var, v in zip(self.var_list, new_v):
 				var -= self.momentum * v
 
-class RMSPropOptimizer(object):
+
+class RMSPropOptimizer(Optimizer):
 	"""docstring for RMSPropOptimizer"""
 	def __init__(self, var_list, lr, decay_rate=0.9):
-		super(RMSPropOptimizer, self).__init__()
-		self.var_list = var_list
-		self.lr = lr
+		super(RMSPropOptimizer, self).__init__(var_list, lr)
 		self.decay_rate = decay_rate
 		self.r = None
 
@@ -192,11 +222,9 @@ class RMSPropOptimizer(object):
 			var -= (self.lr / np.sqrt(1e-6 + r)) * var.grad
 
 
-class AdamOptimizer(object):
+class AdamOptimizer(Optimizer):
 	def __init__(self, var_list, lr, p1=0.9, p2=0.999):
-		super(AdamOptimizer, self).__init__()
-		self.var_list = var_list
-		self.lr = lr
+		super(AdamOptimizer, self).__init__(var_list, lr)
 		self.p1 = p1
 		self.p2 = p2
 		self.t = 1
@@ -311,10 +339,30 @@ class Model(object):
 				l = add(matmul(h, WB), bB)
 
 				nll = sparse_softmax_cross_entropy_with_logits(labels=Y, logits=l)
+				l2_WA = l2_loss(WA, 1e-3)
+				l2_bA = l2_loss(bA, 1e-3)
+				l2_WB = l2_loss(WB, 1e-3)
+				l2_bB = l2_loss(bB, 1e-3)
+				l1_WA = l1_loss(WA, 1e-4)
+				l1_bA = l1_loss(bA, 1e-4)
+				l1_WB = l1_loss(WB, 1e-4)
+				l1_bB = l1_loss(bB, 1e-4)
 				pred = np.argmax(l, axis=-1)
 				acc = np.mean(pred == Y)
 				print(e, b, nll, acc)
+				opt.zero_grad()
+
+				#pdb.set_trace()
 				nll.backward()
+				l2_WA.backward()
+				l2_bA.backward()
+				l2_WB.backward()
+				l2_bB.backward()
+				l1_WA.backward()
+				l1_bA.backward()
+				l1_WB.backward()
+				l1_bB.backward()
+				#pdb.set_trace()
 				opt.step()
 
 		self.WA = WA
