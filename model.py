@@ -153,15 +153,16 @@ class PyTorchModel(Model):
 
 	def net(self, X):
 		if self.is_training:
-			X = F.dropout(X, p=0.25)
+			X = F.dropout(X, p=0.125)
 		h = F.relu(torch.matmul(X, self.WA) + self.bA)
 		if self.is_training:
-			h = F.dropout(h, p=0.4)
-		'''
+			h = F.dropout(h, p=0.2)
 		h = F.relu(torch.matmul(h, self.WC) + self.bC)
 		if self.is_training:
-			h = F.dropout(h, p=0.4)
-		'''
+			h = F.dropout(h, p=0.2)
+		h = F.relu(torch.matmul(h, self.WD) + self.bD)
+		if self.is_training:
+			h = F.dropout(h, p=0.2)
 		l = torch.matmul(h, self.WB) + self.bB
 		return l
 
@@ -170,16 +171,20 @@ class PyTorchModel(Model):
 		self.bA_clone = self.bA.clone()
 		self.WB_clone = self.WB.clone()
 		self.bB_clone = self.bB.clone()
-		#self.WC_clone = self.WC.clone()
-		#self.bC_clone = self.bC.clone()
+		self.WC_clone = self.WC.clone()
+		self.bC_clone = self.bC.clone()
+		self.WD_clone = self.WD.clone()
+		self.bD_clone = self.bD.clone()
 
 	def load_weight(self):
 		self.WA = self.WA_clone.clone()
 		self.bA = self.bA_clone.clone()
 		self.WB = self.WB_clone.clone()
 		self.bB = self.bB_clone.clone()
-		#self.WC = self.WC_clone.clone()
-		#self.bC = self.bC_clone.clone()
+		self.WC = self.WC_clone.clone()
+		self.bC = self.bC_clone.clone()
+		self.WD = self.WD_clone.clone()
+		self.bD = self.bD_clone.clone()
 
 	def train(self, inputfile):
 		args = self.args
@@ -192,12 +197,16 @@ class PyTorchModel(Model):
 		bA = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
 		bA.requires_grad = True
 
-		'''
 		WC = torch.from_numpy(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32))
 		WC.requires_grad = True
 		bC = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
 		bC.requires_grad = True
-	'''
+
+		WD = torch.from_numpy(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32))
+		WD.requires_grad = True
+		bD = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
+		bD.requires_grad = True
+
 		WB = torch.from_numpy(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32))
 		WB.requires_grad = True
 		bB = torch.from_numpy(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32))
@@ -207,14 +216,16 @@ class PyTorchModel(Model):
 		self.bA = bA
 		self.WB = WB
 		self.bB = bB
-		#self.WC = WC
-		#self.bC = bC
+		self.WC = WC
+		self.bC = bC
+		self.WD = WD
+		self.bD = bD
 
 		n_train = len(X_train)
 		indices_train = list(range(n_train))
 		batches = math.ceil(n_train / args.b)
 		print('Batches', batches)
-		opt = torch.optim.Adam([WA, bA, WB, bB], lr=args.l, weight_decay=args.l2)
+		opt = torch.optim.Adam([WA, bA, WB, bB, WC, bC, WD, bD], lr=args.l, weight_decay=args.l2)
 
 		smallest_valid_loss = float('inf')
 		best_acc = 0
