@@ -7,6 +7,12 @@ from functools import partial
 import tempfile
 import os
 import pickle
+import torch
+import torch.nn.functional as F
+import ops
+
+np.random.seed(1234)
+torch.manual_seed(1234)
 
 def initialize_embedding(filename):
 	pickle_filename = filename + '.pickle'
@@ -22,237 +28,10 @@ def initialize_embedding(filename):
 			word = parts[0]
 			embs = [float(x) for x in parts[1:] if x]
 			word_embedding[word] = embs
-		with open(pickle_filename, 'wb') as fout:
-			pickle.dump(word_embedding, fout, pickle.HIGHEST_PROTOCOL)
+		#with open(pickle_filename, 'wb') as fout:
+		#	pickle.dump(word_embedding, fout, pickle.HIGHEST_PROTOCOL)
 
 		return word_embedding
-
-def softmax(ary):
-	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
-	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
-
-# 2. Implement l2 regulizer
-# 3. Implement validation set
-class Tensor(np.ndarray):
-	def __new__(cls, input_array, requires_grad=False):
-		obj = np.asarray(input_array).view(cls)
-		obj.grad = np.zeros(input_array.shape)
-		obj.requires_grad = requires_grad
-		return obj
-
-	def backward(self, grad):
-		self.grad += grad
-
-def matmul(t1, t2):
-	v = np.matmul(t1, t2)
-	v.requires_grad = True
-
-	def backward(grad):
-		g1 = None
-		g2 = None
-		if t1.requires_grad:
-			g1 = grad.dot(t2.T)
-			t1.backward(g1)
-		if t2.requires_grad:
-			g2 = t1.T.dot(grad)
-			t2.backward(g2)
-
-	v.backward = backward
-	return v
-
-def add(t1, t2):
-	v = t1 + t2
-	v.requires_grad = True
-
-	def backward(grad):
-		g1 = None
-		g2 = None
-		if t1.requires_grad:
-			g1 = grad
-			t1.backward(g1)
-		if t2.requires_grad:
-			# hack for broadcasting
-			if t2.squeeze().ndim == 1:
-				g2 = np.mean(grad, axis=0)
-			else:
-				g2 = grad
-			t2.backward(g2)
-
-	v.backward = backward
-	return v
-
-def relu(t1):
-	v = np.maximum(t1, 0.0)
-	v.requires_grad = True
-	mask = (t1 > 0).astype(np.int32)
-
-	def backward(grad):
-		g1 = None
-		if t1.requires_grad:
-			g1 = grad * mask
-			t1.backward(g1)
-
-	v.backward = backward
-	return v
-
-def sigmoid(t1):
-	v = 1 / (1 + np.exp(-t1))
-	v.requires_grad = True
-
-	def backward(grad):
-		g1 = None
-		if t1.requires_grad:
-			g1 = v * (1 - v) * grad
-			t1.backward(g1)
-
-	v.backward = backward
-	return v
-
-def tanh(t1):
-	v = np.tanh(t1)
-	v.requires_grad = True
-
-	def backward(grad):
-		g1 = None
-		if t1.requires_grad:
-			g1 = (1 - v**2) * grad
-			t1.backward(g1)
-
-	v.backward = backward
-	return v
-
-def dropout(t1, keep_prob):
-	# scaled by 1/keep_prob
-	mask = np.random.binomial(1, keep_prob, size=t1.shape) / keep_prob
-	v = t1 * mask
-	v.requires_grad = True
-
-	def backward(grad):
-		g1 = None
-		if t1.requires_grad:
-			g1 = mask * grad
-			t1.backward(g1)
-
-	v.backward = backward
-	return v
-
-def sparse_softmax_cross_entropy_with_logits(labels, logits):
-	l_softmax = softmax(logits) + np.finfo(logits.dtype).eps
-	nll = -np.mean(np.log(l_softmax[range(len(labels)), labels]))
-	nll.requires_grad = True
-
-	def backward():
-		l_softmax[range(len(labels)), labels] -= 1
-		logits.backward(l_softmax)
-	nll.backward = backward
-	return nll
-
-def l2_loss(t1, rate):
-	v = np.mean(t1**2)
-	v.requires_grad = True
-
-	def backward():
-		g1 = 2*t1*rate
-		t1.backward(g1)
-	v.backward = backward
-	return v
-
-def l1_loss(t1, rate):
-	v = np.mean(np.abs(t1))
-	v.requires_grad = True
-
-	mask = (t1 > 0).astype(np.int32)
-	def backward():
-		g1 = mask * 2 - 1
-		t1.backward(g1)
-	v.backward = backward
-	return v
-
-class Optimizer(object):
-	"""docstring for Optimizer"""
-	def __init__(self, var_list, lr):
-		super(Optimizer, self).__init__()
-		self.var_list = var_list
-		self.lr = lr
-
-	def zero_grad(self):
-		for v in self.var_list:
-			v.grad = np.zeros(v.shape)
-
-class SGDOptimizer(Optimizer):
-	"""docstring for SGDOptimizer"""
-	def __init__(self, var_list, lr, momentum=0.9, nesterov=False):
-		super(SGDOptimizer, self).__init__(var_list, lr)
-		self.momentum = momentum
-		self.v = None
-		self.nesterov = nesterov
-
-	def step(self):
-		this_grad = [v.grad*self.lr for v in self.var_list]
-		if self.v is None:
-			new_v = this_grad
-		else:
-			new_v = [self.momentum * v + g for v, g in zip(self.v, this_grad)]
-		self.v = new_v
-
-		for var, v in zip(self.var_list, new_v):
-			var -= v
-
-		if self.nesterov:
-			for var, v in zip(self.var_list, new_v):
-				var -= self.momentum * v
-
-
-class RMSPropOptimizer(Optimizer):
-	"""docstring for RMSPropOptimizer"""
-	def __init__(self, var_list, lr, decay_rate=0.9):
-		super(RMSPropOptimizer, self).__init__(var_list, lr)
-		self.decay_rate = decay_rate
-		self.r = None
-
-	def step(self):
-		this_r = [v.grad**2 * (1-self.decay_rate) for v in self.var_list]
-		if self.r is None:
-			new_r = this_r
-		else:
-			new_r = [self.decay_rate * old_r + new_r for old_r, new_r in zip(self.r, this_r)]
-		self.r = new_r
-
-		for var, r in zip(self.var_list, new_r):
-			var -= (self.lr / np.sqrt(1e-6 + r)) * var.grad
-
-
-class AdamOptimizer(Optimizer):
-	def __init__(self, var_list, lr, p1=0.9, p2=0.999):
-		super(AdamOptimizer, self).__init__(var_list, lr)
-		self.p1 = p1
-		self.p2 = p2
-		self.t = 1
-		self.s = None
-		self.r = None
-
-	def step(self):
-		this_s = [v.grad * (1-self.p1) for v in self.var_list]
-		this_r = [v.grad**2 * (1-self.p2) for v in self.var_list]
-		if self.s is None:
-			new_s = this_s
-		else:
-			new_s = [self.p1 * old_s + new_s for old_s, new_s in zip(self.s, this_s)]
-		if self.r is None:
-			new_r = this_r
-		else:
-			new_r = [self.p2 * old_r + new_r for old_r, new_r in zip(self.r, this_r)]
-		self.s = new_s
-		self.r = new_r
-
-		new_s = np.asarray(new_s) / (1-self.p1**self.t)
-		new_r = np.asarray(new_r) / (1-self.p2**self.t)
-		new_coef = [s/(np.sqrt(r) + 1e-8) for s, r in zip(new_s, new_r)]
-
-		for var, coef in zip(self.var_list, new_coef):
-			var -= self.lr * coef
-
-		self.t += 1
 
 class Model(object):
 	def __init__(self, args):
@@ -281,16 +60,17 @@ class Model(object):
 
 		self.train(train_inputfile)
 		self.test(test_inputfile, test_outpufile)
+
 		true_labels = np.asarray([line.rstrip().split('\t')[1] for line in open(test_inputfile, encoding='utf-8')])
 		pred_labels = np.asarray([line.rstrip() for line in open(test_outpufile, encoding='utf-8')])
 		acc = np.mean(true_labels == pred_labels)
-		print('Accuracy', acc)
+		print('Test Accuracy', acc)
 
-	def train(self, inputfile):
+	def prepare_train_data(self, inputfile):
 		args = self.args
 		label_counter = Counter()
 		embedding = initialize_embedding(args.E)
-		if 'urdu' in embedding:
+		if 'urdu' in args.E:
 			unk = initialize_embedding('unk-urdu.vec')['UNK']
 		else:
 			unk = initialize_embedding('unk.vec')['UNK']
@@ -299,10 +79,11 @@ class Model(object):
 		Y_all_text = []
 		for line in open(inputfile, encoding='utf-8'):
 			text, truth = line.rstrip().split('\t')
-			if len(text) == 0:
-				continue
 			label_counter.update([truth])
-			emb = [embedding.get(t, unk) for t in text.split()[:args.f]]
+			if len(text) == 0:
+				emb = np.zeros((args.f, embedding_dim))
+			else:
+				emb = [embedding.get(t.lower(), unk) for t in text.split()[:args.f]]
 			emb = np.pad(emb, ((0, args.f - len(emb)), (0, 0)), mode='constant', constant_values=0)
 			X_all.append(emb.flatten())
 			Y_all_text.append(truth)
@@ -312,70 +93,32 @@ class Model(object):
 		Y_all = [label_map[y] for y in Y_all_text]
 		Y_inv_all = [label_inv_map[v] for v in Y_all]
 
-		indices = list(range(len(Y_all)))
-		batches = math.ceil(len(Y_all) / args.b)
+		indices_all = list(range(len(Y_all)))
+		np.random.shuffle(indices_all)
+
+		n_total = len(indices_all)
+		n_train = int(n_total * 0.9)
+		n_valid = n_total - n_train
+
+		indices_train = indices_all[:n_train]
+		indices_valid = indices_all[n_train:]
 
 		X_all = np.asarray(X_all, dtype=np.float32)
-		Y_all = np.asarray(Y_all, dtype=np.int32)
+		Y_all = np.asarray(Y_all, dtype=np.int64)
+		X_train = X_all[indices_train]
+		Y_train = Y_all[indices_train]
+		X_valid = X_all[indices_valid]
+		Y_valid = Y_all[indices_valid]
 
-		WA = Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)), requires_grad=True)
-		bA = Tensor(np.random.normal(0, 1, (1, args.u)), requires_grad=True)
-
-		WB = Tensor(np.random.normal(0, 1, (args.u, len(label_map))), requires_grad=True)
-		bB = Tensor(np.random.normal(0, 1, (1, len(label_map))), requires_grad=True)
-
-		#opt = SGDOptimizer([WA, bA, WB, bB], args.l, momentum=0.9)
-		#opt = AdamOptimizer([WA, bA, WB, bB], args.l)
-		opt = RMSPropOptimizer([WA, bA, WB, bB], args.l)
-		for e in range(args.e):
-			np.random.shuffle(indices)
-			for b in range(batches):
-				this_indices = indices[b * args.b : (b+1) * args.b]
-				X = Tensor(X_all[this_indices])
-				Y = Tensor(Y_all[this_indices])
-
-				h_raw = add(matmul(X, WA), bA)
-				h = dropout(relu(h_raw), 0.9)
-				l = add(matmul(h, WB), bB)
-
-				nll = sparse_softmax_cross_entropy_with_logits(labels=Y, logits=l)
-				l2_WA = l2_loss(WA, 1e-3)
-				l2_bA = l2_loss(bA, 1e-3)
-				l2_WB = l2_loss(WB, 1e-3)
-				l2_bB = l2_loss(bB, 1e-3)
-				l1_WA = l1_loss(WA, 1e-4)
-				l1_bA = l1_loss(bA, 1e-4)
-				l1_WB = l1_loss(WB, 1e-4)
-				l1_bB = l1_loss(bB, 1e-4)
-				pred = np.argmax(l, axis=-1)
-				acc = np.mean(pred == Y)
-				print(e, b, nll, acc)
-				opt.zero_grad()
-
-				#pdb.set_trace()
-				nll.backward()
-				l2_WA.backward()
-				l2_bA.backward()
-				l2_WB.backward()
-				l2_bB.backward()
-				l1_WA.backward()
-				l1_bA.backward()
-				l1_WB.backward()
-				l1_bB.backward()
-				#pdb.set_trace()
-				opt.step()
-
-		self.WA = WA
-		self.bA = bA
-		self.WB = WB
-		self.bB = bB
 		self.label_map = label_map
 		self.label_inv_map = label_inv_map
 
-	def test(self, inputfile, outputfile):
+		return X_train, Y_train, X_valid, Y_valid, embedding_dim
+
+	def prepare_test_data(self, inputfile):
 		args = self.args
 		embedding = initialize_embedding(args.E)
-		if 'urdu' in embedding:
+		if 'urdu' in args.E:
 			unk = initialize_embedding('unk-urdu.vec')['UNK']
 		else:
 			unk = initialize_embedding('unk.vec')['UNK']
@@ -388,16 +131,310 @@ class Model(object):
 				text = text[0]
 
 			if len(text) == 0:
-				continue
-
-			emb = [embedding.get(t, unk) for t in text.split()[:args.f]]
+				emb = np.zeros((args.f, len(unk)))
+			else:
+				emb = [embedding.get(t.lower(), unk) for t in text.split()[:args.f]]
 			emb = np.pad(emb, ((0, args.f - len(emb)), (0, 0)), mode='constant', constant_values=0)
 			X_all.append(emb.flatten())
+		return X_all
 
-		X = Tensor(np.asarray(X_all, dtype=np.float32))
-		h_raw = add(matmul(X, self.WA), self.bA)
-		h = relu(h_raw)
-		l = add(matmul(h, self.WB), self.bB)
+	def train(self, inputfile):
+		pass
+
+	def test(self, inputfile, outputfile):
+		pass
+
+
+class PyTorchModel(Model):
+	"""docstring for PyTorchModel"""
+	def __init__(self, args):
+		super(PyTorchModel, self).__init__(args)
+		self.is_training = False
+
+	def net(self, X):
+		if self.is_training:
+			X = F.dropout(X, p=0.25)
+		h = F.relu(torch.matmul(X, self.WA) + self.bA)
+		if self.is_training:
+			h = F.dropout(h, p=0.4)
+		'''
+		h = F.relu(torch.matmul(h, self.WC) + self.bC)
+		if self.is_training:
+			h = F.dropout(h, p=0.4)
+		'''
+		l = torch.matmul(h, self.WB) + self.bB
+		return l
+
+	def save_weight(self):
+		self.WA_clone = self.WA.clone()
+		self.bA_clone = self.bA.clone()
+		self.WB_clone = self.WB.clone()
+		self.bB_clone = self.bB.clone()
+		#self.WC_clone = self.WC.clone()
+		#self.bC_clone = self.bC.clone()
+
+	def load_weight(self):
+		self.WA = self.WA_clone.clone()
+		self.bA = self.bA_clone.clone()
+		self.WB = self.WB_clone.clone()
+		self.bB = self.bB_clone.clone()
+		#self.WC = self.WC_clone.clone()
+		#self.bC = self.bC_clone.clone()
+
+	def train(self, inputfile):
+		args = self.args
+		X_train, Y_train, X_valid, Y_valid, embedding_dim = self.prepare_train_data(inputfile)
+		X_valid = torch.from_numpy(X_valid)
+		Y_valid = torch.from_numpy(Y_valid)
+
+		WA = torch.from_numpy(np.random.normal(0, 1, (embedding_dim*args.f, args.u)).astype(np.float32))
+		WA.requires_grad = True
+		bA = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
+		bA.requires_grad = True
+
+		'''
+		WC = torch.from_numpy(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32))
+		WC.requires_grad = True
+		bC = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
+		bC.requires_grad = True
+	'''
+		WB = torch.from_numpy(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32))
+		WB.requires_grad = True
+		bB = torch.from_numpy(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32))
+		bB.requires_grad = True
+
+		self.WA = WA
+		self.bA = bA
+		self.WB = WB
+		self.bB = bB
+		#self.WC = WC
+		#self.bC = bC
+
+		n_train = len(X_train)
+		indices_train = list(range(n_train))
+		batches = math.ceil(n_train / args.b)
+		print('Batches', batches)
+		opt = torch.optim.Adam([WA, bA, WB, bB], lr=args.l, weight_decay=args.l2)
+
+		smallest_valid_loss = float('inf')
+		best_acc = 0
+		wait = 0
+		n_lr_decay = 5
+		n_break = 20
+
+		#train_s = []
+		#valid_s = []
+		for e in range(args.e):
+			np.random.shuffle(indices_train)
+			nll_train_ary = []
+			nll_valid_ary = []
+			acc_train_ary = []
+			acc_valid_ary = []
+			for b in range(batches):
+				this_indices = indices_train[b * args.b : (b+1) * args.b]
+				X = torch.from_numpy(X_train[this_indices])
+				Y = torch.from_numpy(Y_train[this_indices])
+
+				self.is_training = True
+				l = self.net(X)
+				nll = F.cross_entropy(l, Y)
+				pred = np.argmax(l.detach().numpy(), axis=-1)
+				acc = np.mean(pred == Y.detach().numpy())
+
+				self.is_training = False
+				l_valid = self.net(X_valid)
+				nll_valid = F.cross_entropy(l_valid, Y_valid)
+				pred_valid = np.argmax(l_valid.detach().numpy(), axis=-1)
+				acc_valid = np.mean(pred_valid == Y_valid.detach().numpy())
+
+				opt.zero_grad()
+				nll.backward()
+				opt.step()
+
+				nll_train_ary.append(nll.detach().numpy())
+				nll_valid_ary.append(nll_valid.detach().numpy())
+				acc_train_ary.append(acc)
+				acc_valid_ary.append(acc_valid)
+
+			#print(e, b, nll_np, acc, nll_valid_np, acc_valid)
+			#train_s.append(nll_np)
+			#valid_s.append(nll_valid_np)
+
+			nll_train_np = np.mean(nll_train_ary)
+			nll_valid_np = np.mean(nll_valid_ary)
+			acc_train = np.mean(acc_train_ary)
+			acc_valid = np.mean(acc_valid_ary)
+
+			print(f'Epoch: {e}, Train NLL: {nll_train_np}, Train Acc: {acc_train}, Valid NLL: {nll_valid_np}, Valid Acc: {acc_valid}')
+
+			if best_acc < acc_valid:
+				best_acc = acc_valid
+				smallest_valid_loss = nll_valid_np
+				self.save_weight()
+				wait = 0
+				print('New smallest')
+			else:
+				wait += 1
+				print('Wait {}'.format(wait))
+				if wait % n_lr_decay == 0:
+					opt.param_groups[0]['lr'] *= 0.95
+					print('Apply lr decay, new lr: %f' % opt.param_groups[0]['lr'])
+
+				if wait % n_break == 0:
+					print('Break')
+					break
+
+		self.load_weight()
+		print('Best valid acc', best_acc)
+		'''
+		import matplotlib.pyplot as plt
+		plt.plot(train_s, label='train')
+		plt.plot(valid_s, label='valid')
+		plt.xlabel('Epoch')
+		plt.ylabel('NLL')
+		plt.ylim(0, 50)
+		plt.title('PyTorch')
+		plt.legend()
+		#pdb.set_trace()
+		'''
+
+
+	def test(self, inputfile, outputfile):
+		X_all = self.prepare_test_data(inputfile)
+		X = torch.from_numpy(np.asarray(X_all, dtype=np.float32))
+
+		self.is_training = False
+		l = self.net(X)
+		pred = np.argmax(l.detach().numpy(), axis=-1)
+		pred_text = [self.label_inv_map[index] for index in pred]
+		with open(outputfile, 'w') as fout:
+			fout.write('\n'.join(pred_text))
+
+class NumpyModel(Model):
+	"""docstring for NumpyModel"""
+	def __init__(self, args):
+		super(NumpyModel, self).__init__(args)
+
+	def train(self, inputfile):
+		args = self.args
+		X_train, Y_train, X_valid, Y_valid, embedding_dim = self.prepare_train_data(inputfile)
+
+		WA = ops.Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)).astype(np.float32), requires_grad=True)
+		bA = ops.Tensor(np.random.normal(0, 1, (1, args.u)).astype(np.float32), requires_grad=True)
+
+		#WC = ops.Tensor(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32), requires_grad=True)
+		#bC = ops.Tensor(np.random.normal(0, 1, (1, args.u)).astype(np.float32), requires_grad=True)
+
+		WB = ops.Tensor(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32), requires_grad=True)
+		bB = ops.Tensor(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32), requires_grad=True)
+
+		n_train = len(X_train)
+		indices_train = list(range(n_train))
+		batches = math.ceil(n_train / args.b)
+		#opt = ops.GradientDescentOptimizer([WA, bA, WB, bB], args.l)
+		opt = ops.AdamOptimizer([WA, bA, WB, bB], args.l)
+		#opt = ops.RMSPropOptimizer([WA, bA, WB, bB], args.l)
+
+		smallest_valid_loss = float('inf')
+		n_lr_decay = 5
+		n_stop = 20
+
+		train_s = []
+		valid_s = []
+		for e in range(args.e):
+			np.random.shuffle(indices_train)
+			for b in range(batches):
+				this_indices = indices_train[b * args.b : (b+1) * args.b]
+				X = ops.Tensor(X_train[this_indices])
+				Y = ops.Tensor(Y_train[this_indices])
+
+				h_raw = ops.add(ops.matmul(X, WA), bA)
+				h = ops.dropout(ops.relu(h_raw), 0.5)
+
+				#h_c_raw = ops.add(ops.matmul(h, WC), bC)
+				#h_c = ops.dropout(ops.relu(h_c_raw), 0.5)
+				l = ops.add(ops.matmul(h, WB), bB)
+
+				nll = ops.sparse_softmax_cross_entropy_with_logits(labels=Y, logits=l)
+
+				h_raw_valid = ops.add(ops.matmul(X_valid, WA), bA)
+				h_valid = ops.relu(h_raw_valid)
+
+				#h_c = ops.relu(ops.add(ops.matmul(h_valid, WC), bC))
+
+
+				l_valid = ops.add(ops.matmul(h_valid, WB), bB)
+				nll_valid = ops.sparse_softmax_cross_entropy_with_logits(labels=Y_valid, logits=l_valid)
+				pred_valid = np.argmax(l_valid, axis=-1)
+				acc_valid = np.mean(pred_valid == Y_valid)
+
+				#l2_WA = ops.l2_loss(WA, 1e-3)
+				#l2_bA = ops.l2_loss(bA, 1e-3)
+				#l2_WB = ops.l2_loss(WB, 1e-3)
+				#l2_bB = ops.l2_loss(bB, 1e-3)
+				#l1_WA = ops.l1_loss(WA, 1e-4)
+				#l1_bA = ops.l1_loss(bA, 1e-4)
+				#l1_WB = ops.l1_loss(WB, 1e-4)
+				#l1_bB = ops.l1_loss(bB, 1e-4)
+				pred = np.argmax(l, axis=-1)
+				acc = np.mean(pred == Y)
+				print(e, b, nll, acc, nll_valid, acc_valid)
+				train_s.append(nll)
+				valid_s.append(nll_valid)
+				opt.zero_grad()
+
+				#pdb.set_trace()
+				nll.backward()
+				#l2_WA.backward()
+				#l2_bA.backward()
+				#l2_WB.backward()
+				#l2_bB.backward()
+				#l1_WA.backward()
+				#l1_bA.backward()
+				#l1_WB.backward()
+				#l1_bB.backward()
+				#pdb.set_trace()
+				opt.step()
+
+				if nll_valid < smallest_valid_loss:
+					smallest_valid_loss = nll_valid
+					wait = 0
+					print('New smallest')
+				else:
+					wait += 1
+					print('Wait {}'.format(wait))
+					if wait % n_lr_decay == 0:
+						opt.lr *= 0.95
+						print('Apply lr decay, new lr: %f' % opt.lr)
+
+		'''
+		import matplotlib.pyplot as plt
+		plt.plot(train_s, label='train')
+		plt.plot(valid_s, label='valid')
+		plt.xlabel('Epoch')
+		plt.ylabel('NLL')
+		plt.ylim(0, 50)
+		plt.title('Numpy')
+		plt.legend()
+		pdb.set_trace()
+		'''
+
+		self.WA = WA
+		self.bA = bA
+		self.WB = WB
+		self.bB = bB
+		#self.WC = WC
+		#self.bC = bC
+
+
+	def test(self, inputfile, outputfile):
+		X_all = self.prepare_test_data(inputfile)
+		X = ops.Tensor(np.asarray(X_all, dtype=np.float32))
+		h_raw = ops.add(ops.matmul(X, self.WA), self.bA)
+		h = ops.relu(h_raw)
+		#h_c = ops.relu(ops.add(ops.matmul(h, self.WC), self.bC))
+
+		l = ops.add(ops.matmul(h, self.WB), self.bB)
 		pred = np.argmax(l, axis=-1)
 		pred_text = [self.label_inv_map[index] for index in pred]
 		with open(outputfile, 'w') as fout:

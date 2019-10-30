@@ -1,5 +1,5 @@
 import argparse
-from model import Model
+from model import NumpyModel
 import pdb
 import pickle
 

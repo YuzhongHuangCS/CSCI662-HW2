@@ -1,5 +1,5 @@
 import argparse
-from model import Model
+from model import NumpyModel
 import pdb
 import pickle
 from collections import Counter, defaultdict
@@ -10,10 +10,10 @@ import math
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser('Nonlinear text classification trainer')
 	parser.add_argument('-u', help='number of hidden units', type=int, default=100)
-	parser.add_argument('-l', help='learning rate', type=float, default=0.1)
-	parser.add_argument('-f', help='number of words to read per data item', type=int, default=100)
-	parser.add_argument('-b', help='minibatch size', type=int, default=5000)
-	parser.add_argument('-e', help='number of epochs to train for', type=int, default=40)
+	parser.add_argument('-l', help='learning rate', type=float, default=0.01)
+	parser.add_argument('-f', help='number of words to read per data item', type=int, default=300)
+	parser.add_argument('-b', help='minibatch size', type=int, default=1000000)
+	parser.add_argument('-e', help='number of epochs to train for', type=int, default=100)
 	parser.add_argument('-E', help='word embedding file to be read', type=str, default='glove.6B.50d.txt')
 	parser.add_argument('-i', help='training file to be read', type=str, default='4dim.train.txt')
 	parser.add_argument('-o', help='model file to be written', type=str, default='model.pickle')
@@ -21,7 +21,7 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 	print('Args:', args)
 
-	model = Model(args)
+	model = NumpyModel(args)
 	if args.s:
 		model.score(args.i)
 	else:
