@@ -19,6 +19,8 @@ if __name__ == "__main__":
 	parser.add_argument('-o', help='model file to be written', type=str, default='model.pickle')
 	parser.add_argument('-s', help='score mode', type=bool, default=False)
 	parser.add_argument('-l2', help='l2 reg', type=float, default=1e-5)
+	parser.add_argument('-idr', help='input drop rate', type=float, default=0.25)
+	parser.add_argument('-hdr', help='hidden drop rate', type=float, default=0.4)
 	args = parser.parse_args()
 	print('Args:', args)
 

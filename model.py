@@ -10,6 +10,7 @@ import pickle
 import torch
 import torch.nn.functional as F
 import ops
+import matplotlib.pyplot as plt
 
 np.random.seed(1234)
 torch.manual_seed(1234)
@@ -112,6 +113,7 @@ class Model(object):
 
 		self.label_map = label_map
 		self.label_inv_map = label_inv_map
+		#pdb.set_trace()
 
 		return X_train, Y_train, X_valid, Y_valid, embedding_dim
 
@@ -153,10 +155,10 @@ class PyTorchModel(Model):
 
 	def net(self, X):
 		if self.is_training:
-			X = F.dropout(X, p=0.25)
-		h = F.sigmoid(torch.matmul(X, self.WA) + self.bA)
+			X = F.dropout(X, p=self.args.idr)
+		h = F.relu(torch.matmul(X, self.WA) + self.bA)
 		if self.is_training:
-			h = F.dropout(h, p=0.4)
+			h = F.dropout(h, p=self.args.hdr)
 		l = torch.matmul(h, self.WB) + self.bB
 		return l
 
@@ -179,13 +181,19 @@ class PyTorchModel(Model):
 		X_valid = torch.from_numpy(X_valid)
 		Y_valid = torch.from_numpy(Y_valid)
 
+		#u1 = math.sqrt(6/(embedding_dim*args.f + args.u))
 		WA = torch.from_numpy(np.random.normal(0, 1, (embedding_dim*args.f, args.u)).astype(np.float32))
 		WA.requires_grad = True
+
+		#u2 = math.sqrt(6/(1 + args.u))
 		bA = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
 		bA.requires_grad = True
 
+		#u3 = math.sqrt(6/(args.u + len(self.label_map)))
 		WB = torch.from_numpy(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32))
 		WB.requires_grad = True
+
+		#u4 = math.sqrt(6/(1 + len(self.label_map)))
 		bB = torch.from_numpy(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32))
 		bB.requires_grad = True
 
@@ -206,8 +214,8 @@ class PyTorchModel(Model):
 		n_lr_decay = 5
 		n_break = 20
 
-		#train_s = []
-		#valid_s = []
+		train_s = []
+		valid_s = []
 		for e in range(args.e):
 			np.random.shuffle(indices_train)
 			nll_train_ary = []
@@ -240,11 +248,11 @@ class PyTorchModel(Model):
 				acc_train_ary.append(acc)
 				acc_valid_ary.append(acc_valid)
 
-			#train_s.append(nll_np)
-			#valid_s.append(nll_valid_np)
-
 			nll_train_np = np.mean(nll_train_ary)
 			nll_valid_np = np.mean(nll_valid_ary)
+			train_s.append(nll_train_np)
+			valid_s.append(nll_valid_np)
+
 			acc_train = np.mean(acc_train_ary)
 			acc_valid = np.mean(acc_valid_ary)
 
@@ -269,17 +277,19 @@ class PyTorchModel(Model):
 
 		self.load_weight()
 		print('Best valid acc', best_acc)
-		'''
-		import matplotlib.pyplot as plt
+
+
 		plt.plot(train_s, label='train')
 		plt.plot(valid_s, label='valid')
 		plt.xlabel('Epoch')
 		plt.ylabel('NLL')
-		plt.ylim(0, 50)
+		#plt.ylim(0, 50)
 		plt.title('PyTorch')
 		plt.legend()
+		#plt.show()
 		#pdb.set_trace()
-		'''
+		print('Done')
+
 
 
 	def test(self, inputfile, outputfile):
@@ -301,10 +311,10 @@ class NumpyModel(Model):
 
 	def net(self, X):
 		if self.is_training:
-			X = ops.dropout(X, drop_prob=0.1)
+			X = ops.dropout(X, drop_prob=self.args.idr)
 		h = ops.relu(ops.add(ops.matmul(X, self.WA), self.bA))
 		if self.is_training:
-			h = ops.dropout(h, drop_prob=0.1)
+			h = ops.dropout(h, drop_prob=self.args.hdr)
 		l = ops.add(ops.matmul(h, self.WB), self.bB)
 		return l
 
@@ -348,8 +358,8 @@ class NumpyModel(Model):
 		n_lr_decay = 5
 		n_break = 20
 
-		#train_s = []
-		#valid_s = []
+		train_s = []
+		valid_s = []
 		for e in range(args.e):
 			np.random.shuffle(indices_train)
 			nll_train_ary = []
@@ -394,6 +404,9 @@ class NumpyModel(Model):
 
 			nll_train_np = np.mean(nll_train_ary)
 			nll_valid_np = np.mean(nll_valid_ary)
+			train_s.append(nll_train_np)
+			valid_s.append(nll_valid_np)
+
 			acc_train = np.mean(acc_train_ary)
 			acc_valid = np.mean(acc_valid_ary)
 
@@ -419,27 +432,23 @@ class NumpyModel(Model):
 		self.load_weight()
 		print('Best valid acc', best_acc)
 
-		'''
-		import matplotlib.pyplot as plt
 		plt.plot(train_s, label='train')
 		plt.plot(valid_s, label='valid')
 		plt.xlabel('Epoch')
 		plt.ylabel('NLL')
-		plt.ylim(0, 50)
+		#plt.ylim(0, 50)
 		plt.title('Numpy')
 		plt.legend()
-		pdb.set_trace()
-		'''
-
+		#plt.show()
+		#pdb.set_trace()
+		print('Done')
 
 	def test(self, inputfile, outputfile):
 		X_all = self.prepare_test_data(inputfile)
 		X = ops.Tensor(np.asarray(X_all, dtype=np.float32))
-		h_raw = ops.add(ops.matmul(X, self.WA), self.bA)
-		h = ops.relu(h_raw)
-		#h_c = ops.relu(ops.add(ops.matmul(h, self.WC), self.bC))
 
-		l = ops.add(ops.matmul(h, self.WB), self.bB)
+		self.is_training = False
+		l = self.net(X)
 		pred = np.argmax(l, axis=-1)
 		pred_text = [self.label_inv_map[index] for index in pred]
 		with open(outputfile, 'w') as fout:

@@ -4,8 +4,6 @@ def softmax(ary):
 	ary_exp = np.exp(ary-np.max(ary, axis=-1).reshape(-1, 1))
 	return ary_exp / np.sum(ary_exp, axis=-1).reshape(-1, 1)
 
-# 2. Implement l2 regulizer
-# 3. Implement validation set
 class Tensor(np.ndarray):
 	def __new__(cls, input_array, requires_grad=False):
 		obj = np.asarray(input_array).view(cls)
