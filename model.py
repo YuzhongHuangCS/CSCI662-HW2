@@ -153,16 +153,10 @@ class PyTorchModel(Model):
 
 	def net(self, X):
 		if self.is_training:
-			X = F.dropout(X, p=0.125)
-		h = F.relu(torch.matmul(X, self.WA) + self.bA)
+			X = F.dropout(X, p=0.25)
+		h = F.sigmoid(torch.matmul(X, self.WA) + self.bA)
 		if self.is_training:
-			h = F.dropout(h, p=0.2)
-		h = F.relu(torch.matmul(h, self.WC) + self.bC)
-		if self.is_training:
-			h = F.dropout(h, p=0.2)
-		h = F.relu(torch.matmul(h, self.WD) + self.bD)
-		if self.is_training:
-			h = F.dropout(h, p=0.2)
+			h = F.dropout(h, p=0.4)
 		l = torch.matmul(h, self.WB) + self.bB
 		return l
 
@@ -171,20 +165,13 @@ class PyTorchModel(Model):
 		self.bA_clone = self.bA.clone()
 		self.WB_clone = self.WB.clone()
 		self.bB_clone = self.bB.clone()
-		self.WC_clone = self.WC.clone()
-		self.bC_clone = self.bC.clone()
-		self.WD_clone = self.WD.clone()
-		self.bD_clone = self.bD.clone()
+
 
 	def load_weight(self):
 		self.WA = self.WA_clone.clone()
 		self.bA = self.bA_clone.clone()
 		self.WB = self.WB_clone.clone()
 		self.bB = self.bB_clone.clone()
-		self.WC = self.WC_clone.clone()
-		self.bC = self.bC_clone.clone()
-		self.WD = self.WD_clone.clone()
-		self.bD = self.bD_clone.clone()
 
 	def train(self, inputfile):
 		args = self.args
@@ -197,16 +184,6 @@ class PyTorchModel(Model):
 		bA = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
 		bA.requires_grad = True
 
-		WC = torch.from_numpy(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32))
-		WC.requires_grad = True
-		bC = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
-		bC.requires_grad = True
-
-		WD = torch.from_numpy(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32))
-		WD.requires_grad = True
-		bD = torch.from_numpy(np.random.normal(0, 1, (1, args.u)).astype(np.float32))
-		bD.requires_grad = True
-
 		WB = torch.from_numpy(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32))
 		WB.requires_grad = True
 		bB = torch.from_numpy(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32))
@@ -216,16 +193,12 @@ class PyTorchModel(Model):
 		self.bA = bA
 		self.WB = WB
 		self.bB = bB
-		self.WC = WC
-		self.bC = bC
-		self.WD = WD
-		self.bD = bD
 
 		n_train = len(X_train)
 		indices_train = list(range(n_train))
 		batches = math.ceil(n_train / args.b)
 		print('Batches', batches)
-		opt = torch.optim.Adam([WA, bA, WB, bB, WC, bC, WD, bD], lr=args.l, weight_decay=args.l2)
+		opt = torch.optim.Adam([WA, bA, WB, bB], lr=args.l, weight_decay=args.l2)
 
 		smallest_valid_loss = float('inf')
 		best_acc = 0
@@ -267,7 +240,6 @@ class PyTorchModel(Model):
 				acc_train_ary.append(acc)
 				acc_valid_ary.append(acc_valid)
 
-			#print(e, b, nll_np, acc, nll_valid_np, acc_valid)
 			#train_s.append(nll_np)
 			#valid_s.append(nll_valid_np)
 
@@ -325,6 +297,29 @@ class NumpyModel(Model):
 	"""docstring for NumpyModel"""
 	def __init__(self, args):
 		super(NumpyModel, self).__init__(args)
+		self.is_training = False
+
+	def net(self, X):
+		if self.is_training:
+			X = ops.dropout(X, drop_prob=0.1)
+		h = ops.relu(ops.add(ops.matmul(X, self.WA), self.bA))
+		if self.is_training:
+			h = ops.dropout(h, drop_prob=0.1)
+		l = ops.add(ops.matmul(h, self.WB), self.bB)
+		return l
+
+	def save_weight(self):
+		self.WA_clone = self.WA.copy()
+		self.bA_clone = self.bA.copy()
+		self.WB_clone = self.WB.copy()
+		self.bB_clone = self.bB.copy()
+
+
+	def load_weight(self):
+		self.WA = self.WA_clone.copy()
+		self.bA = self.bA_clone.copy()
+		self.WB = self.WB_clone.copy()
+		self.bB = self.bB_clone.copy()
 
 	def train(self, inputfile):
 		args = self.args
@@ -333,90 +328,96 @@ class NumpyModel(Model):
 		WA = ops.Tensor(np.random.normal(0, 1, (embedding_dim*args.f, args.u)).astype(np.float32), requires_grad=True)
 		bA = ops.Tensor(np.random.normal(0, 1, (1, args.u)).astype(np.float32), requires_grad=True)
 
-		#WC = ops.Tensor(np.random.normal(0, 1, (args.u, args.u)).astype(np.float32), requires_grad=True)
-		#bC = ops.Tensor(np.random.normal(0, 1, (1, args.u)).astype(np.float32), requires_grad=True)
-
 		WB = ops.Tensor(np.random.normal(0, 1, (args.u, len(self.label_map))).astype(np.float32), requires_grad=True)
 		bB = ops.Tensor(np.random.normal(0, 1, (1, len(self.label_map))).astype(np.float32), requires_grad=True)
+
+		self.WA = WA
+		self.bA = bA
+		self.WB = WB
+		self.bB = bB
 
 		n_train = len(X_train)
 		indices_train = list(range(n_train))
 		batches = math.ceil(n_train / args.b)
-		#opt = ops.GradientDescentOptimizer([WA, bA, WB, bB], args.l)
+		print('Batches', batches)
 		opt = ops.AdamOptimizer([WA, bA, WB, bB], args.l)
-		#opt = ops.RMSPropOptimizer([WA, bA, WB, bB], args.l)
 
 		smallest_valid_loss = float('inf')
+		best_acc = 0
+		wait = 0
 		n_lr_decay = 5
-		n_stop = 20
+		n_break = 20
 
-		train_s = []
-		valid_s = []
+		#train_s = []
+		#valid_s = []
 		for e in range(args.e):
 			np.random.shuffle(indices_train)
+			nll_train_ary = []
+			nll_valid_ary = []
+			acc_train_ary = []
+			acc_valid_ary = []
 			for b in range(batches):
 				this_indices = indices_train[b * args.b : (b+1) * args.b]
 				X = ops.Tensor(X_train[this_indices])
 				Y = ops.Tensor(Y_train[this_indices])
 
-				h_raw = ops.add(ops.matmul(X, WA), bA)
-				h = ops.dropout(ops.relu(h_raw), 0.5)
-
-				#h_c_raw = ops.add(ops.matmul(h, WC), bC)
-				#h_c = ops.dropout(ops.relu(h_c_raw), 0.5)
-				l = ops.add(ops.matmul(h, WB), bB)
-
+				self.is_training = True
+				l = self.net(X)
 				nll = ops.sparse_softmax_cross_entropy_with_logits(labels=Y, logits=l)
+				pred = np.argmax(l, axis=-1)
+				acc = np.mean(pred == Y)
 
-				h_raw_valid = ops.add(ops.matmul(X_valid, WA), bA)
-				h_valid = ops.relu(h_raw_valid)
-
-				#h_c = ops.relu(ops.add(ops.matmul(h_valid, WC), bC))
-
-
-				l_valid = ops.add(ops.matmul(h_valid, WB), bB)
+				self.is_training = False
+				l_valid = self.net(X_valid)
 				nll_valid = ops.sparse_softmax_cross_entropy_with_logits(labels=Y_valid, logits=l_valid)
 				pred_valid = np.argmax(l_valid, axis=-1)
 				acc_valid = np.mean(pred_valid == Y_valid)
 
-				#l2_WA = ops.l2_loss(WA, 1e-3)
-				#l2_bA = ops.l2_loss(bA, 1e-3)
-				#l2_WB = ops.l2_loss(WB, 1e-3)
-				#l2_bB = ops.l2_loss(bB, 1e-3)
-				#l1_WA = ops.l1_loss(WA, 1e-4)
-				#l1_bA = ops.l1_loss(bA, 1e-4)
-				#l1_WB = ops.l1_loss(WB, 1e-4)
-				#l1_bB = ops.l1_loss(bB, 1e-4)
-				pred = np.argmax(l, axis=-1)
-				acc = np.mean(pred == Y)
-				print(e, b, nll, acc, nll_valid, acc_valid)
-				train_s.append(nll)
-				valid_s.append(nll_valid)
-				opt.zero_grad()
+				l2_WA = ops.l2_loss(WA, args.l2)
+				l2_bA = ops.l2_loss(bA, args.l2)
+				l2_WB = ops.l2_loss(WB, args.l2)
+				l2_bB = ops.l2_loss(bB, args.l2)
 
-				#pdb.set_trace()
+				opt.zero_grad()
 				nll.backward()
-				#l2_WA.backward()
-				#l2_bA.backward()
-				#l2_WB.backward()
-				#l2_bB.backward()
-				#l1_WA.backward()
-				#l1_bA.backward()
-				#l1_WB.backward()
-				#l1_bB.backward()
-				#pdb.set_trace()
+				l2_WA.backward()
+				l2_bA.backward()
+				l2_WB.backward()
+				l2_bB.backward()
 				opt.step()
 
-				if nll_valid < smallest_valid_loss:
-					smallest_valid_loss = nll_valid
-					wait = 0
-					print('New smallest')
-				else:
-					wait += 1
-					print('Wait {}'.format(wait))
-					if wait % n_lr_decay == 0:
-						opt.lr *= 0.95
-						print('Apply lr decay, new lr: %f' % opt.lr)
+				nll_train_ary.append(nll)
+				nll_valid_ary.append(nll_valid)
+				acc_train_ary.append(acc)
+				acc_valid_ary.append(acc_valid)
+
+
+			nll_train_np = np.mean(nll_train_ary)
+			nll_valid_np = np.mean(nll_valid_ary)
+			acc_train = np.mean(acc_train_ary)
+			acc_valid = np.mean(acc_valid_ary)
+
+			print(f'Epoch: {e}, Train NLL: {nll_train_np}, Train Acc: {acc_train}, Valid NLL: {nll_valid_np}, Valid Acc: {acc_valid}')
+
+			if best_acc < acc_valid:
+				best_acc = acc_valid
+				smallest_valid_loss = nll_valid_np
+				self.save_weight()
+				wait = 0
+				print('New smallest')
+			else:
+				wait += 1
+				print('Wait {}'.format(wait))
+				if wait % n_lr_decay == 0:
+					opt.lr *= 0.95
+					print('Apply lr decay, new lr: %f' % opt.lr)
+
+				if wait % n_break == 0:
+					print('Break')
+					break
+
+		self.load_weight()
+		print('Best valid acc', best_acc)
 
 		'''
 		import matplotlib.pyplot as plt
@@ -429,13 +430,6 @@ class NumpyModel(Model):
 		plt.legend()
 		pdb.set_trace()
 		'''
-
-		self.WA = WA
-		self.bA = bA
-		self.WB = WB
-		self.bB = bB
-		#self.WC = WC
-		#self.bC = bC
 
 
 	def test(self, inputfile, outputfile):
